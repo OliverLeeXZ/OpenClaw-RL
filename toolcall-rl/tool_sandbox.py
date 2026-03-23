@@ -20,18 +20,18 @@ import psutil
 
 # Configuration for tool execution
 TOOL_CONFIGS = {
-    "max_turns": 16,
-    "max_tool_calls": 16,
-    "tool_concurrency": 32,  # Aggressive: 32 concurrent processes
+    "max_turns": int(os.getenv("TOOLCALL_MAX_TURNS", "16")),
+    "max_tool_calls": int(os.getenv("TOOLCALL_MAX_TOOL_CALLS", "16")),
+    "tool_concurrency": int(os.getenv("TOOLCALL_TOOL_CONCURRENCY", "32")),
     # Python interpreter settings
-    "python_timeout": 120,  # 2 minutes for complex calculations
-    "python_memory_limit": "4GB",  # 4GB per Python process
-    "python_cpu_limit": 1,
+    "python_timeout": int(os.getenv("TOOLCALL_PYTHON_TIMEOUT", "120")),
+    "python_memory_limit": os.getenv("TOOLCALL_PYTHON_MEMORY_LIMIT", "4GB"),
+    "python_cpu_limit": int(os.getenv("TOOLCALL_PYTHON_CPU_LIMIT", "1")),
     # Memory management settings
-    "max_memory_usage": 12288,  # 12GB total (75% of 16GB)
-    "cleanup_threshold": 6144,  # 6GB
-    "aggressive_cleanup_threshold": 3072,  # 3GB
-    "force_cleanup_threshold": 9216,  # 9GB
+    "max_memory_usage": int(os.getenv("TOOLCALL_MAX_MEMORY_USAGE_MB", "12288")),
+    "cleanup_threshold": int(os.getenv("TOOLCALL_CLEANUP_THRESHOLD_MB", "6144")),
+    "aggressive_cleanup_threshold": int(os.getenv("TOOLCALL_AGGRESSIVE_CLEANUP_THRESHOLD_MB", "3072")),
+    "force_cleanup_threshold": int(os.getenv("TOOLCALL_FORCE_CLEANUP_THRESHOLD_MB", "9216")),
 }
 
 # Global semaphore for controlling concurrent tool executions

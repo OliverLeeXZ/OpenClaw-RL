@@ -1,7 +1,8 @@
 from datasets import load_dataset
 
 # Load the original dataset
-ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+# ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+ds = load_dataset("/mnt/shared-storage-user/llmbr-share/lixiaozhe/CODE/DATA/BytedTsinghua-SIA/DAPO-Math-17k", split="train")
 
 
 # Map to extract the ground_truth from the reward_model dict and create a new 'label' field
