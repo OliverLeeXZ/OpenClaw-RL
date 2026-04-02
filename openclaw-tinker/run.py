@@ -50,6 +50,8 @@ def parse_args() -> TinkerConfig:
                         help="OPD advantage weight (combine method only)")
     parser.add_argument("--w-rl", type=float, default=float(os.getenv("OPENCLAW_COMBINE_W_RL", "1.0")),
                         help="RL advantage weight (combine method only)")
+    parser.add_argument("--train-epochs", type=int, default=int(os.getenv("TRAIN_EPOCHS", "1")),
+                        help="Duplicate samples N times per rollout batch (combine default: 2)")
 
     # OPD eval mode
     parser.add_argument("--eval-mode", action="store_true",
@@ -87,6 +89,7 @@ def parse_args() -> TinkerConfig:
         resume_from_ckpt=args.resume_from_ckpt,
         w_opd=args.w_opd,
         w_rl=args.w_rl,
+        train_epochs=args.train_epochs,
         eval_mode=args.eval_mode,
         prm_m=args.prm_m,
         prm_temperature=args.prm_temperature,

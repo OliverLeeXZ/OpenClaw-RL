@@ -43,6 +43,8 @@
 
 ## 📰 News
 
+
+- **[2026/3/25]** 🙌 We sincerely thank [Tinker](https://thinkingmachines.ai/tinker/) for its generous support of this project, which has enabled more experiments and faster iteration.
 - **[2026/3/20]** 🔥 You can use your own openclaw now, simply install [this extension](https://github.com/Gen-Verse/OpenClaw-RL/tree/main/extensions/rl-training-headers).
 - **[2026/3/13]** 🚀 OpenClaw-RL now supports both local GPU and cloud ([Tinker](https://thinkingmachines.ai/tinker/)) deployment. Launch with [**one line of code**](#combinemethod) — Hybrid RL, OPD, and Binary RL all supported!
 - **[2026/3/12]** 🔥 We support LoRA training now!
@@ -127,6 +129,8 @@ Our long-term goal is to **advance personalized, practically useful agents with 
 
 We welcome contributions that integrate new learning methods into the OpenClaw-RL framework! The integration of [SDFT](https://arxiv.org/abs/2601.19897) / [SDPO](https://arxiv.org/abs/2601.20802) into [openclaw-opd](./openclaw-opd), and [supporting LoRA](https://github.com/Gen-Verse/OpenClaw-RL/pull/23) are great examples of successful community contributions.
 
+<!--
+
 **Highly wanted contributions:**
 - 🤖 **Qwen3.5 model support with slime** — launch scripts and model configs for the Qwen3.5 family
 - 🔧 **Low-precision training examples** — FP8/INT4 training scripts for existing methods
@@ -202,7 +206,7 @@ If you're interested in any of these, feel free to open an issue to discuss your
 
 </details>
 
-
+-->
 
 
 ## 📝 Contents

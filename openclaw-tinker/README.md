@@ -14,7 +14,7 @@ Unified training framework for OpenClaw on [Tinker](https://tinker.build) cloud 
 export TINKER_API_KEY="your-tinker-api-key"
 
 # Combined method
-python run.py --method combine --model-name Qwen/Qwen3-8B --prm-m 1 --batch-size 16 --w-opd 1.0 --w-rl 1.0
+python run.py --method combine --model-name Qwen/Qwen3-8B --prm-m 1 --batch-size 16 --w-opd 1.0 --w-rl 1.0 --train-epochs 2
 
 # RL method 
 python run.py --method rl --model-name Qwen/Qwen3-8B --prm-m 3 --batch-size 16
@@ -77,6 +77,7 @@ All parameters can be set via CLI flags or environment variables:
 |------|---------|---------|--------|-------------|
 | `--w-opd` | `OPENCLAW_COMBINE_W_OPD` | `1.0` | combine | OPD advantage weight |
 | `--w-rl` | `OPENCLAW_COMBINE_W_RL` | `1.0` | combine | RL advantage weight |
+| `--train-epochs` | `TRAIN_EPOCHS` | `1` | all | Duplicate samples N times per rollout batch (combine typically uses 2) |
 | `--eval-mode` | `EVAL_MODE` | `false` | opd | Enable PRM eval scoring alongside OPD |
 
 ### PRM / Hint Judge
@@ -113,7 +114,7 @@ On-Policy Distillation using hindsight hints and teacher knowledge:
 1. Policy model generates responses; environment provides next_state observations
 2. Hint judge extracts key information from next_state into a concise hint
 3. Teacher model scores the response (with hint context) to get token-level log-probs
-4. Advantage = reverse KL from teacher: `-kl_coef * (student_lp - teacher_lp)`
+4. Advantage = per-token distillation: `teacher_lp - student_lp`
 5. All samples get reward = 1.0 (no explicit reward signal)
 6. Optional `--eval-mode`: also compute PRM eval scores for monitoring
 
@@ -122,12 +123,12 @@ On-Policy Distillation using hindsight hints and teacher knowledge:
 Weighted combination with three-way sample dispatch:
 
 - **OPD+RL samples** (have both next_state and reward): get both advantage components
-- **OPD-only samples** (next_state but no reward): only teacher KL advantage
+- **OPD-only samples** (next_state but no reward): only teacher distillation advantage
 - **RL-only samples** (reward but no next_state): only scalar reward advantage
 
 Combined advantage per token:
 ```
-combined_adv_i = w_opd * (-kl_coef * (student_lp_i - teacher_lp_i)) + w_rl * reward
+combined_adv_i = w_opd * (teacher_lp_i - student_lp_i) + w_rl * reward
 ```
 
 ## Tinker Integration

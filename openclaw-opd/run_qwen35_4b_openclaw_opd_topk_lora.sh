@@ -1,19 +1,26 @@
 #!/bin/bash
+# Qwen3.5-4B LoRA training with OpenClaw OPD top-k distillation
+# Fewer GPUs than full fine-tuning: default 4 GPUs (2 actor + 1 rollout + 1 PRM)
+# Uses FSDP backend instead of Megatron TP
 
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
+SKIP_CLUSTER_CLEANUP=${SKIP_CLUSTER_CLEANUP:-0}
+if [ "${SKIP_CLUSTER_CLEANUP}" != "1" ]; then
+  pkill -9 sglang
+  sleep 3
+  ray stop --force
+  pkill -9 ray
+  pkill -9 python
+  sleep 3
+  pkill -9 ray
+  pkill -9 python
+fi
 
 set -ex
 
 # keep stdout/stderr unbuffered in ray jobs
 export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
+export FLASHINFER_WORKSPACE_BASE="${FLASHINFER_WORKSPACE_BASE:-/tmp}"
 
 NUM_GPUS=${NUM_GPUS:-4}
 ACTOR_GPUS=${ACTOR_GPUS:-2}
@@ -35,42 +42,40 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 SLIME_ROOT="$(cd -- "${SCRIPT_DIR}/../slime" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 
-HF_CKPT=${HF_CKPT:-/absolute/path/to/Qwen3-4B-Thinking-2507}
+HF_CKPT=${HF_CKPT:-${REPO_ROOT}/models/Qwen3.5-4B}
 REF_LOAD=${REF_LOAD:-${HF_CKPT}}
-SAVE_CKPT=${SAVE_CKPT:-/absolute/path/to/OpenClaw-RL/ckpt/qwen3-4b-openclaw-combine}
-PRM_MODEL_PATH=${PRM_MODEL_PATH:-/absolute/path/to/Qwen3-4B-Thinking-2507}
+SAVE_CKPT=${SAVE_CKPT:-${REPO_ROOT}/ckpt/qwen35-4b-openclaw-opd-topk-lora}
+PRM_MODEL_PATH=${PRM_MODEL_PATH:-${HF_CKPT}}
 
 export SGLANG_API_KEY="${SGLANG_API_KEY}"
-export SERVED_MODEL_NAME="qwen3-4b"
+export SERVED_MODEL_NAME="qwen3.5-4b-lora"
 export HOST="0.0.0.0"
 export PORT="30000"
-export OPENCLAW_RECORD_ENABLED="${OPENCLAW_RECORD_ENABLED:-1}"  # 0=off, 1=on
-export OPENCLAW_RECORD_FILE="${SCRIPT_DIR}/results/qwen3_4b_lora_record.jsonl"
-export TP="${TP:-2}"
+export OPENCLAW_RECORD_ENABLED="${OPENCLAW_RECORD_ENABLED:-1}"
+export OPENCLAW_RECORD_FILE="${SCRIPT_DIR}/results/qwen35_4b_lora_record.jsonl"
+export TP="${TP:-1}"
 export CONTEXT_LENGTH="32768"
 export MEM_FRACTION_STATIC="0.85"
-export REASONING_PARSER="qwen3"
-export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-qwen25}"
-export PRM_M="${PRM_M:-1}"
-export OPENCLAW_OPD_TEACHER_LP_MAX_CONCURRENCY="${OPENCLAW_OPD_TEACHER_LP_MAX_CONCURRENCY:-1}"
-export OPENCLAW_COMBINE_W_RL="${OPENCLAW_COMBINE_W_RL:-1.0}"
-export OPENCLAW_COMBINE_W_OPD="${OPENCLAW_COMBINE_W_OPD:-1.0}"
-export TRAIN_EPOCHS="${TRAIN_EPOCHS:-2}"
+export REASONING_PARSER="${REASONING_PARSER:-qwen3}"
+export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-qwen3_coder}"
+export SGLANG_LANGUAGE_ONLY="${SGLANG_LANGUAGE_ONLY:-1}"
+export PRM_M="${PRM_M:-3}"
+export OPENCLAW_OPD_TEACHER_LP_MAX_CONCURRENCY="${OPENCLAW_OPD_TEACHER_LP_MAX_CONCURRENCY:-3}"
 
 
 CKPT_ARGS=(
    --hf-checkpoint "${HF_CKPT}"
    --ref-load "${REF_LOAD}"
    --save "${SAVE_CKPT}"
-   --save-interval 100
+   --save-interval 1
 )
 
 ROLLOUT_ARGS=(
    --disable-rollout-global-dataset
-   --rollout-function-path openclaw_combine_rollout.generate_rollout_openclaw_combine
+   --rollout-function-path openclaw_opd_rollout.generate_rollout_openclaw_opd
 
    --num-rollout 100000000
-   --rollout-batch-size 16
+   --rollout-batch-size 4
    --n-samples-per-prompt 1
    --rollout-max-response-len 8192
    --rollout-max-context-len 32768
@@ -86,22 +91,21 @@ PERF_ARGS=(
    --gradient-checkpointing
 )
 
-COMBINE_ARGS=(
-   --advantage-estimator grpo
-   --disable-rewards-normalization
+OPD_ARGS=(
    --loss-type custom_loss
-   --custom-loss-function-path combine_loss.combine_loss_function
-   --use-kl-loss
-   --kl-loss-coef 0.0
-   --kl-loss-type low_var_kl
+   --custom-loss-function-path topk_distillation_loss.topk_distillation_loss_function
+   --distill-topk 50
+   --disable-compute-advantages-and-returns
+   # OPD rewards are dummy 1.0 values; without this flag, _drop_constant_reward_groups
+   # treats each single-sample group as "constant" and drops all but one, causing an
+   # empty-partition crash when dp_size > 1 (e.g. FSDP with ACTOR_GPUS >= 2).
+   --disable-rewards-normalization
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
 )
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 1e-5
+   --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
@@ -110,8 +114,8 @@ OPTIMIZER_ARGS=(
 
 LORA_ARGS=(
    --use-lora
-   --lora-rank 64
-   --lora-alpha 64
+   --lora-rank 16
+   --lora-alpha 32
    --lora-target-modules "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 )
 
@@ -122,8 +126,12 @@ SGLANG_ARGS=(
    --sglang-tool-call-parser "${TOOL_CALL_PARSER}"
    --sglang-mem-fraction-static 0.85
    --sglang-context-length 32768
-   --sglang-reasoning-parser qwen3
+   --sglang-reasoning-parser "${REASONING_PARSER}"
 )
+
+if [ "${SGLANG_LANGUAGE_ONLY}" = "1" ]; then
+  SGLANG_ARGS+=(--sglang-language-only)
+fi
 
 PRM_ARGS=(
    --prm-enable
@@ -136,8 +144,8 @@ PRM_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path openclaw_combine_api_server.generate
-   --custom-rm-path openclaw_combine_api_server.reward_func
+   --custom-generate-function-path openclaw_opd_api_server.generate
+   --custom-rm-path openclaw_opd_api_server.reward_func
 )
 
 USE_WANDB=${USE_WANDB:-1}
@@ -147,14 +155,12 @@ if [ "${USE_WANDB}" = "1" ] && [ -n "${WANDB_KEY_VALUE}" ]; then
   WANDB_ARGS=(
     --use-wandb
     --wandb-project ${WANDB_PROJECT}
-    --wandb-group qwen3-4b-openclaw-combine-lora
+    --wandb-group qwen35-4b-openclaw-opd-topk-lora
     --wandb-key ${WANDB_KEY_VALUE}
   )
 else
   WANDB_ARGS=()
 fi
-
-export OPENCLAW_EVAL_MODE="${OPENCLAW_EVAL_MODE:-1}"
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
@@ -162,18 +168,15 @@ ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" --d
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"${SCRIPT_DIR}:${SCRIPT_DIR}/../openclaw-opd:${SLIME_ROOT}\",
+    \"PYTHONPATH\": \"${SCRIPT_DIR}:${SLIME_ROOT}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"OPENCLAW_EVAL_MODE\": \"${OPENCLAW_EVAL_MODE}\",
-    \"OPENCLAW_COMBINE_W_RL\": \"${OPENCLAW_COMBINE_W_RL}\",
-    \"OPENCLAW_COMBINE_W_OPD\": \"${OPENCLAW_COMBINE_W_OPD}\",
-    \"TRAIN_EPOCHS\": \"${TRAIN_EPOCHS}\"
+    \"FLASHINFER_WORKSPACE_BASE\": \"${FLASHINFER_WORKSPACE_BASE}\"
   }
 }"
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train_async.py \
+   -- python3 "${SLIME_ROOT}/train_async.py" \
    --train-backend fsdp \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node "${ACTOR_GPUS}" \
@@ -182,7 +185,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
-   ${COMBINE_ARGS[@]} \
+   ${OPD_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \

@@ -42,6 +42,7 @@ class TinkerConfig:
     # -- Combined method: advantage weights --
     w_opd: float = 1.0
     w_rl: float = 1.0
+    train_epochs: int = 1  # Duplicate samples N times per rollout batch (combine default: 2)
 
     # -- OPD: optional eval-mode (compute PRM eval scores alongside OPD) --
     eval_mode: bool = False

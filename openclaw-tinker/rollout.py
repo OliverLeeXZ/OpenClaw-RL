@@ -129,5 +129,17 @@ async def drain_output_queue(
         if len(data) < batch_size:
             await asyncio.sleep(0.05)
 
+    # Duplicate samples for multiple training epochs (matches Slime's TRAIN_EPOCHS).
+    train_epochs = worker.config.train_epochs
+    if train_epochs > 1:
+        original = list(data)
+        for _ in range(train_epochs - 1):
+            data.extend(original)
+        print(
+            f"[Rollout] duplicated {len(original)} groups x{train_epochs} "
+            f"= {len(data)} groups for training",
+            flush=True,
+        )
+
     print(f"[Rollout] drained {len(data)} groups in {time.time() - start:.2f}s", flush=True)
     return data

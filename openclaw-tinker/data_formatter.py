@@ -3,12 +3,12 @@
 Supports all three methods:
 
   RL / OPD (sample_to_datum):
-    advantage = scalar GRPO reward, optionally + KL penalty from teacher logprobs
-    Used via: batch_to_datums(batch, advantages, kl_penalty_coef)
+    advantage = scalar GRPO reward + (teacher_lp - student_lp) if teacher logprobs present
+    Used via: batch_to_datums(batch, advantages)
 
   Combined (sample_to_datum_combined):
-    combined_adv = w_opd * (-kl_coef * (student_lp - teacher_lp)) + w_rl * reward
-    Used via: batch_to_datums_combined(batch, w_opd, w_rl, kl_penalty_coef)
+    combined_adv = w_opd * (teacher_lp - student_lp) + w_rl * reward
+    Used via: batch_to_datums_combined(batch, w_opd, w_rl)
 
 Tinker Datum convention:
   model_input   - input tokens (all but the last token of the full sequence)
@@ -103,34 +103,37 @@ def _build_datum(all_tokens: list[int], logprobs: list[float], advantages: list[
 # RL / OPD datum conversion
 # ---------------------------------------------------------------------------
 
-def sample_to_datum(sample: TrainingSample, advantage: float, kl_penalty_coef: float = 0.0):
-    """Convert one sample + scalar advantage into a Tinker Datum (RL / OPD)."""
+def sample_to_datum(sample: TrainingSample, advantage: float):
+    """Convert one sample + scalar advantage into a Tinker Datum (RL / OPD).
+
+    For OPD samples with teacher_logprobs, the advantage is augmented with
+    per-token distillation signal: (teacher_lp - student_lp).
+    This matches Slime's --advantage-estimator on_policy_distillation where
+    advantage = teacher_logp - old_logp (raw, no coefficient).
+    """
     prompt_len = len(sample.prompt_tokens)
     all_tokens = sample.prompt_tokens + sample.response_tokens
 
     logprobs = [0.0] * (prompt_len - 1) + list(sample.response_logprobs)
     resp_advantages = [advantage * float(m) for m in sample.loss_mask]
 
-    # OPD: add reverse-KL penalty to response advantages
-    if sample.teacher_logprobs is not None and kl_penalty_coef > 0:
+    # OPD: add per-token distillation advantage (teacher_lp - student_lp)
+    if sample.teacher_logprobs is not None:
         for i in range(min(len(resp_advantages), len(sample.teacher_logprobs))):
             student_lp = sample.response_logprobs[i] if i < len(sample.response_logprobs) else 0.0
             teacher_lp = sample.teacher_logprobs[i]
-            kl_i = student_lp - teacher_lp
-            resp_advantages[i] += -kl_penalty_coef * kl_i * float(sample.loss_mask[i])
+            resp_advantages[i] += (teacher_lp - student_lp) * float(sample.loss_mask[i])
 
     advantages = [0.0] * (prompt_len - 1) + resp_advantages
     return _build_datum(all_tokens, logprobs, advantages, sample.session_id, sample.turn_num)
 
 
-def batch_to_datums(
-    batch: list[TrainingSample], advantages: list[float], kl_penalty_coef: float = 0.0,
-) -> list:
+def batch_to_datums(batch: list[TrainingSample], advantages: list[float]) -> list:
     """Convert a batch of samples + per-sample scalar advantages to Tinker Datums."""
     datums = []
     for sample, adv in zip(batch, advantages):
         try:
-            datums.append(sample_to_datum(sample, adv, kl_penalty_coef=kl_penalty_coef))
+            datums.append(sample_to_datum(sample, adv))
         except Exception as e:
             logger.error(
                 "[DataFormatter] FAILED to convert session=%s turn=%d: %s",
@@ -147,11 +150,15 @@ def sample_to_datum_combined(
     sample: TrainingSample,
     w_opd: float = 1.0,
     w_rl: float = 1.0,
-    kl_penalty_coef: float = 0.0,
 ):
     """Convert one sample into a Tinker Datum with combined OPD+RL advantages.
 
-    combined_adv_i = w_opd * (-kl_coef * (student_lp_i - teacher_lp_i)) + w_rl * reward
+    combined_adv_i = w_opd * (teacher_lp_i - student_lp_i) + w_rl * reward
+
+    Matches Slime's combine_loss.py:
+        combined_advantages = w_opd * teacher_advantages + w_rl * grpo_advantages
+    where teacher_advantages = teacher_logp - old_logp (token-level, raw)
+    and   grpo_advantages   = reward broadcast (scalar)
     """
     prompt_len = len(sample.prompt_tokens)
     all_tokens = sample.prompt_tokens + sample.response_tokens
@@ -165,12 +172,12 @@ def sample_to_datum_combined(
         # RL component: broadcast scalar reward
         rl_adv = w_rl * sample.reward * mask
 
-        # OPD component: reverse-KL from teacher
+        # OPD component: per-token (teacher_lp - student_lp)
         opd_adv = 0.0
-        if sample.teacher_logprobs is not None and kl_penalty_coef > 0 and i < len(sample.teacher_logprobs):
+        if sample.teacher_logprobs is not None and i < len(sample.teacher_logprobs):
             student_lp = sample.response_logprobs[i] if i < len(sample.response_logprobs) else 0.0
             teacher_lp = sample.teacher_logprobs[i]
-            opd_adv = w_opd * (-kl_penalty_coef * (student_lp - teacher_lp)) * mask
+            opd_adv = w_opd * (teacher_lp - student_lp) * mask
 
         resp_advantages.append(rl_adv + opd_adv)
 
@@ -182,14 +189,13 @@ def batch_to_datums_combined(
     batch: list[TrainingSample],
     w_opd: float = 1.0,
     w_rl: float = 1.0,
-    kl_penalty_coef: float = 0.0,
 ) -> list:
     """Convert a batch of samples to Tinker Datums with combined advantages."""
     datums = []
     for sample in batch:
         try:
             datums.append(sample_to_datum_combined(
-                sample, w_opd=w_opd, w_rl=w_rl, kl_penalty_coef=kl_penalty_coef,
+                sample, w_opd=w_opd, w_rl=w_rl,
             ))
         except Exception as e:
             logger.error(

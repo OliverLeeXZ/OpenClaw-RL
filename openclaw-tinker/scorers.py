@@ -250,6 +250,15 @@ async def _tinker_teacher_logprobs(
         prompt_logprobs = response.prompt_logprobs or []
 
         prompt_token_count = len(tokenizer.encode(enhanced_prompt, add_special_tokens=False))
+
+        # Detect tokenizer drift: prompt_logprobs should cover full_ids
+        if len(prompt_logprobs) != len(full_ids):
+            logger.warning(
+                "[Scorer] tokenizer drift: prompt_logprobs len=%d vs full_ids len=%d "
+                "(session=%s turn=%d). Logprob alignment may be off.",
+                len(prompt_logprobs), len(full_ids), session_id, turn_num,
+            )
+
         teacher_lps = [
             float(lp) if lp is not None else 0.0
             for lp in prompt_logprobs[prompt_token_count:]
